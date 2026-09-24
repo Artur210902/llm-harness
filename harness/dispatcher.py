@@ -134,7 +134,7 @@ class Dispatcher:
         sandbox: PytestSandbox,
         tracer: Tracer,
         agents: dict[str, AgentSpec] = AGENTS,
-        max_revisions: int = 2,
+        max_revisions: int = 3,
         use_skills: bool = True,
         mutation: MutationTester | None = None,
         mutation_threshold: float = 0.6,

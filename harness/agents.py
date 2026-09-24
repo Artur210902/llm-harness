@@ -72,7 +72,9 @@ AGENTS: dict[str, AgentSpec] = {
             "HIGH/CRITICAL findings fail the audit. Output: SecurityReport.",
             mission="Audit the implementation against the spec for security weaknesses, including "
             "abuse of inputs, unsafe APIs and resource exhaustion. Report each finding with "
-            "severity, location, and a concrete fix. Do not report style issues.",
+            "severity, location, and a concrete fix. Only inputs the spec marks as untrusted are "
+            "attacker-controlled; a CRITICAL/HIGH finding must include a concrete `exploit`, or the "
+            "harness downgrades it. Do not report style issues.",
             output_model=SecurityReport,
         ),
         AgentSpec(

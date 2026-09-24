@@ -1,6 +1,6 @@
 ---
 name: pytest-patterns
-version: "1.2"
+version: "1.3"
 description: Testing methodology for black-box pytest suites - equivalence classes, boundaries, negative tests, deterministic time, isolated file system.
 applies_to: [test_generator, code_reviewer]
 triggers: []
@@ -24,3 +24,7 @@ triggers: []
   dropped min/max bound, a skipped `raise`, an inverted boolean) and re-runs your suite. Assert exact
   values after each state change, not just truthiness; after an unusual event (e.g. the clock going
   backwards) also check that later behaviour is still exactly right.
+- **TST-10** Tests run on Windows and POSIX. Do not build expected values with the same path
+  machinery the code uses (`os.path.normpath/join`, `resolve`) and do not assert behaviour for
+  platform-dependent names (trailing dots or spaces, `...`, device names like `CON`) unless the
+  spec defines it explicitly.

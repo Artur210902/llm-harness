@@ -1,6 +1,6 @@
 ---
 name: secure-coding
-version: "1.2"
+version: "1.3"
 description: OWASP/CWE-based secure coding rules for code that touches untrusted input, the file system, processes or resource limits; includes an audit severity scale and attack payloads for tests.
 applies_to: [code_generator, test_generator, security_auditor, code_reviewer]
 triggers: [upload, filename, file name, path, untrusted, user input, subprocess, pickle, deserializ, sql, загруз, пользовател]
@@ -24,6 +24,11 @@ triggers: [upload, filename, file name, path, untrusted, user input, subprocess,
 - **SEC-07** Fail closed: on any doubt, raise a dedicated exception. Error messages must not echo
   secrets or absolute server paths back to the client.
 - **SEC-08** No hard-coded secrets, tokens or credentials; read them from the environment.
+- **SEC-09** Calibrate severity to the threat model: the attacker controls only the inputs the
+  spec marks as untrusted (e.g. a client-supplied file name). Operator configuration, the base
+  directory and the server's own file system layout are trusted. A CRITICAL/HIGH finding needs a
+  concrete `exploit`: the exact untrusted input to the public API and what it achieves. If you
+  cannot write one, it is at most MEDIUM (defence in depth).
 
 ## Severity scale (for audits)
 - CRITICAL: remote code execution or arbitrary file write/read reachable from untrusted input.

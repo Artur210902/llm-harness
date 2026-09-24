@@ -290,6 +290,8 @@ def upload_audit(call: LLMCall) -> dict:
                 "findings": [{"rule_id": "SEC-02", "severity": "HIGH", "location": "resolve_upload_path",
                               "description": "User-controlled name joined without containment check; "
                                              "'../x' and absolute paths escape base_dir (CWE-22).",
+                              "exploit": "resolve_upload_path('/srv/uploads', '../../etc/passwd') returns "
+                                         "'/srv/uploads/../../etc/passwd', i.e. /etc/passwd",
                               "recommendation": "Validate with an allow-list and verify the resolved "
                                                 "path stays inside base_dir."}],
                 "applied_skill_rules": ["SEC-01", "SEC-02"]}

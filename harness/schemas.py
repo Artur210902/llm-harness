@@ -134,6 +134,11 @@ class Finding(BaseModel):
     location: str
     description: str
     recommendation: str
+    exploit: str = Field(
+        default="",
+        description="Required for CRITICAL/HIGH: the exact untrusted input to the public API that triggers "
+        "the issue, and what it achieves. Without it the harness downgrades the finding to MEDIUM.",
+    )
 
 
 class SecurityReport(AgentOutput):
@@ -143,9 +148,13 @@ class SecurityReport(AgentOutput):
 
     @model_validator(mode="after")
     def _blocking_findings_fail(self) -> SecurityReport:
-        # Harness policy, not model opinion: a blocking finding always fails the audit.
-        if any(f.severity in BLOCKING for f in self.findings):
-            self.verdict = "FAIL"
+        # Harness policy, not model opinion: a blocking finding must be demonstrable, and a
+        # demonstrable blocking finding always fails the audit.
+        for finding in self.findings:
+            if finding.severity in BLOCKING and not finding.exploit.strip():
+                finding.severity = "MEDIUM"
+                finding.description = f"[downgraded from blocking: no concrete exploit] {finding.description}"
+        self.verdict = "FAIL" if any(f.severity in BLOCKING for f in self.findings) else "PASS"
         return self
 
     def headline(self) -> str:

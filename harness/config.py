@@ -54,7 +54,7 @@ class Settings:
             ssl_verify=flag("HARNESS_SSL_VERIFY"),
             max_tokens=int(env("HARNESS_MAX_TOKENS") or 0) or None,
             temperature=float(env("HARNESS_TEMPERATURE", "0.2")),
-            max_revisions=int(env("HARNESS_MAX_REVISIONS", "2")),
+            max_revisions=int(env("HARNESS_MAX_REVISIONS", "3")),
             sandbox_timeout_s=int(env("HARNESS_SANDBOX_TIMEOUT", "60")),
             max_mutants=int(env("HARNESS_MAX_MUTANTS", "12")),
             mutation_threshold=float(env("HARNESS_MUTATION_THRESHOLD", "0.6")),

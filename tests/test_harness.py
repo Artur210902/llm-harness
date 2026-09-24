@@ -106,9 +106,19 @@ def test_validation_rejects_broken_plans(registry, mutate, message):
 
 
 def test_blocking_finding_forces_security_fail():
-    finding = Finding(severity="HIGH", location="f", description="d", recommendation="r")
+    finding = Finding(severity="HIGH", location="f", description="d", recommendation="r",
+                      exploit="resolve_upload_path(base, '../x') returns a path outside base")
 
     assert SecurityReport(verdict="PASS", findings=[finding]).verdict == "FAIL"
+
+
+def test_blocking_finding_without_exploit_is_downgraded():
+    finding = Finding(severity="HIGH", location="f", description="symlinks in base_dir", recommendation="r")
+
+    report = SecurityReport(verdict="FAIL", findings=[finding])
+
+    assert report.findings[0].severity == "MEDIUM"
+    assert report.verdict == "PASS"  # the verdict follows demonstrable blocking findings only
 
 
 def test_only_blocking_review_issues_hold_delivery():
@@ -173,7 +183,7 @@ def test_invalid_revision_keeps_previous_attempt_and_fails_the_run(tmp_path, reg
     tracer.close()
 
     assert result.final.status == "FAILED"  # weak tests were never fixed, and the run still finished
-    assert result.revisions == 2
+    assert result.revisions == dispatcher.max_revisions
     assert (tmp_path / "prompts" / "s3_test_generator.rev1.invalid_reply.txt").is_file()
 
 
