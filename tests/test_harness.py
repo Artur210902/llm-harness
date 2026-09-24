@@ -273,17 +273,58 @@ def test_weakness_policy():
     assert "self._" not in (weakness(MutationReport(total=4, killed=1, survivors=[lock]), 0.6) or "")
 
 
-@pytest.mark.parametrize("skills, killed", [(("pytest-patterns",), False),
-                                            (("pytest-patterns", "concurrency-safety"), True)])
-def test_concurrency_skill_makes_tests_detect_a_missing_lock(skills, killed):
-    """CONC-06 in action: only the skilled suite notices that the lock was removed."""
+_ATOMIC_BY_ACCIDENT = '''
+import threading
+
+class Counter:
+    def __init__(self, limit):
+        self._left = limit
+        self._lock = threading.Lock()
+
+    def take(self):
+        with self._lock:
+            if self._left >= 1:
+                self._left -= 1
+                return True
+            return False
+'''
+
+_HAMMER = '''
+import threading
+from counter import Counter
+
+def test_never_over_grants():
+    for _ in range(10):
+        counter, start, granted = Counter(100), threading.Barrier(8), []
+        def worker():
+            start.wait()
+            granted.append(sum(counter.take() for _ in range(200)))
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        assert sum(granted) == 100
+'''
+
+
+def test_drop_lock_mutant_exposes_a_race_the_gil_would_hide():
+    """Without the forced thread switch, this check-then-act is accidentally atomic under the GIL."""
+    tests = TestSuite(module_name="counter", test_code=_HAMMER)
+    no_lock = next(m for m in generate_mutants(_ATOMIC_BY_ACCIDENT, 20) if m.operator == "DropLock")
+    sandbox = PytestSandbox()
+
+    assert sandbox.run(CodeArtifact(module_name="counter", code=_ATOMIC_BY_ACCIDENT), tests).status == "passed"
+    assert "sleep(0)" in no_lock.code and "_lock:" not in no_lock.code
+    assert sandbox.run(CodeArtifact(module_name="counter", code=no_lock.code), tests).status == "failed"
+
+
+def test_skilled_concurrency_suite_kills_the_drop_lock_mutant():
+    skills = ("pytest-patterns", "concurrency-safety")
     tests = TestSuite.model_validate(ratelimit_tests(LLMCall("test_generator", "", "", skills=skills)))
     no_lock = next(m for m in generate_mutants(BUCKET_V2, 20) if m.operator == "DropLock")
     sandbox = PytestSandbox()
 
     assert sandbox.run(CodeArtifact(module_name="rate_limiter", code=BUCKET_V2), tests).status == "passed"
-    report = sandbox.run(CodeArtifact(module_name="rate_limiter", code=no_lock.code), tests)
-    assert (report.status != "passed") is killed
+    assert sandbox.run(CodeArtifact(module_name="rate_limiter", code=no_lock.code), tests).status == "failed"
 
 
 @pytest.mark.parametrize(

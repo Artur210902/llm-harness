@@ -5,7 +5,8 @@ itself, the harness plants small deterministic bugs (mutants) into the generated
 module and re-runs the same tests: a good suite fails on (kills) most of them.
 
 Operators (AST-based):
-  DropLock     remove every `with <...lock...>:` at once (is thread safety tested at all?)
+  DropLock     remove every `with <...lock...>:` at once and force thread switches inside the
+               former critical sections (is thread safety tested at all?)
   DropClamp    `min(a, b)` / `max(a, b)` -> the computed argument (missing bound)
   CompareSwap  `>=`<->`>`, `<=`<->`<`, `==`<->`!=` (off-by-one at a boundary)
   FlipReturn   `return True` <-> `return False`
@@ -127,10 +128,34 @@ class _Replace(ast.NodeTransformer):
         return super().visit(node)
 
 
+def _thread_switch() -> ast.stmt:
+    return ast.parse("__import__('time').sleep(0)").body[0]
+
+
+def _with_switches(statements: list[ast.stmt]) -> list[ast.stmt]:
+    """Put a thread switch before every statement, recursively into if/for/while/try blocks."""
+    result: list[ast.stmt] = []
+    for statement in statements:
+        for block in ("body", "orelse", "finalbody"):
+            if isinstance(getattr(statement, block, None), list) and not isinstance(
+                    statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                setattr(statement, block, _with_switches(getattr(statement, block)))
+        result += [_thread_switch(), statement]
+    return result
+
+
 class _DropLocks(ast.NodeTransformer):
+    """Remove the lock AND make the race observable.
+
+    Under CPython's GIL a thread switch happens only at calls and backward jumps, so a lock-free
+    check-then-act without calls in between is accidentally atomic and no test could tell. The
+    mutant therefore also yields before each statement of the former critical section, the way a
+    preemptive interpreter (free-threaded CPython, PyPy, a future refactoring) may.
+    """
+
     def visit_With(self, node: ast.With):  # noqa: N802 (ast visitor naming)
         self.generic_visit(node)
-        return node.body if _is_lock(node) else node
+        return _with_switches(node.body) if _is_lock(node) else node
 
 
 # --- mutant generation ------------------------------------------------------------------
@@ -147,7 +172,8 @@ def _drop_lock_mutant(source: str) -> list[Mutant]:
         return []
     mutated = _DropLocks().visit(tree)
     return [Mutant("DropLock", locks[0].lineno,
-                   f"removed all {len(locks)} lock block(s): the code runs unsynchronized", _unparse(mutated))]
+                   f"removed all {len(locks)} lock block(s) and forced thread switches inside them",
+                   _unparse(mutated))]
 
 
 def _node_mutants(source: str, name: str, matches, build) -> list[Mutant]:

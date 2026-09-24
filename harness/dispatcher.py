@@ -182,7 +182,7 @@ class Dispatcher:
         )
         user = f"# User request\n{request.strip()}"
         self.tracer.save("prompts/s0_dispatcher.md", f"# SYSTEM\n\n{system}\n\n# USER\n\n{user}\n")
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             self.tracer.planning(len(self.agents), len(self.registry), attempt)
             try:
                 plan = complete_structured(self.llm, LLMCall("dispatcher", system, user), ExecutionPlan)
