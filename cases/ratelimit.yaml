@@ -1,0 +1,8 @@
+id: ratelimit
+title: "Case 2 · Thread-safe rate limiter (concurrency + revision loop)"
+offline_script: ratelimit
+request: |
+  Для нашего API-шлюза нужен потокобезопасный rate limiter по алгоритму token bucket:
+  ёмкость и скорость пополнения (токенов в секунду) задаются в конструкторе,
+  метод try_acquire(tokens=1) неблокирующий и возвращает bool.
+  Код должен тестироваться без реального ожидания времени.

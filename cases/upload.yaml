@@ -1,0 +1,8 @@
+id: upload
+title: "Case 1 · Secure upload path (security-critical)"
+offline_script: upload
+request: |
+  Мы принимаем файлы от клиентов через веб-форму и сохраняем их на диск сервера.
+  Напиши функцию resolve_upload_path(base_dir, filename), которая возвращает путь,
+  по которому нужно сохранить файл внутри каталога загрузок. Имя файла приходит
+  от клиента как есть, без какой-либо обработки.
