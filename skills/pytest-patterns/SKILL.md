@@ -1,6 +1,6 @@
 ---
 name: pytest-patterns
-version: "1.1"
+version: "1.2"
 description: Testing methodology for black-box pytest suites - equivalence classes, boundaries, negative tests, deterministic time, isolated file system.
 applies_to: [test_generator, code_reviewer]
 triggers: []
@@ -20,3 +20,7 @@ triggers: []
   names, from the module the spec names. Do not rely on private attributes.
 - **TST-08** Map every acceptance criterion to at least one test and report the mapping in
   `covered_criteria`.
+- **TST-09** Write tests that kill mutants: the harness plants bugs (off-by-one comparisons, a
+  dropped min/max bound, a skipped `raise`, an inverted boolean) and re-runs your suite. Assert exact
+  values after each state change, not just truthiness; after an unusual event (e.g. the clock going
+  backwards) also check that later behaviour is still exactly right.

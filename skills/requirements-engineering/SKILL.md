@@ -1,6 +1,6 @@
 ---
 name: requirements-engineering
-version: "1.0"
+version: "1.1"
 description: Turns a vague feature request into a testable specification - exact API and error contract, Given/When/Then criteria, edge-case taxonomy, abuse cases, explicit assumptions.
 applies_to: [requirements_analyst]
 triggers: []
@@ -17,3 +17,6 @@ triggers: []
 - **REQ-04** State assumptions and out-of-scope items explicitly instead of guessing silently.
 - **REQ-05** If any input comes from an untrusted party, add abuse cases (what an attacker would
   send) as acceptance criteria, not as an afterthought.
+- **REQ-06** No gold-plating: do not invent behaviour the request does not need. Out-of-domain
+  input (NaN, infinity, negative sizes, wrong types) is rejected with the documented exception,
+  never given special semantics; every extra feature is extra code and extra risk.
