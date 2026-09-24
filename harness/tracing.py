@@ -167,7 +167,8 @@ class Tracer:
                 self._print(f"    [red]{escape(_short(line, 140))}[/]")
         if report.mutation is not None:
             for s in report.mutation.survivors:
-                self._print(f"    [yellow]survived {s.operator} (line {s.line}): {escape(_short(s.description, 110))}[/]")
+                self._print(f"    [yellow]survived {s.operator} (line {s.line}): "
+                            f"{escape(_short(s.description, 110))}[/]")
 
     # --- gate, revisions, final -------------------------------------------------
 

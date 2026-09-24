@@ -32,9 +32,19 @@ class LLMClient(Protocol):
     def complete(self, call: LLMCall) -> str: ...
 
 
+class OutputParseError(ValueError):
+    def __init__(self, message: str, raw: str = ""):
+        super().__init__(message)
+        self.raw = raw  # the offending reply, kept for the run folder
+
+
+class TruncatedReplyError(OutputParseError):
+    """The model hit its output-token limit, so the JSON is cut off."""
+
+
 class OpenAICompatibleClient:
     def __init__(self, *, api_key: str, model: str, base_url: str | None, temperature: float,
-                 ssl_verify: bool = True):
+                 ssl_verify: bool = True, max_tokens: int | None = None):
         import httpx
         from openai import OpenAI  # imported lazily: offline mode needs no SDK
 
@@ -43,6 +53,7 @@ class OpenAICompatibleClient:
         self._client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
         self._model = model
         self._temperature = temperature
+        self._max_tokens = max_tokens
         self.name = f"{model} @ {base_url or 'api.openai.com'}"
 
     def complete(self, call: LLMCall) -> str:
@@ -53,12 +64,17 @@ class OpenAICompatibleClient:
                 {"role": "system", "content": call.system},
                 {"role": "user", "content": call.user},
             ],
+            **({"max_tokens": self._max_tokens} if self._max_tokens else {}),
         )
-        return response.choices[0].message.content or ""
-
-
-class OutputParseError(ValueError):
-    pass
+        choice = response.choices[0]
+        content = choice.message.content or ""
+        used = getattr(response.usage, "completion_tokens", None)
+        # some servers cut the reply at the limit yet report finish_reason="stop"
+        if choice.finish_reason == "length" or (self._max_tokens and used and used >= self._max_tokens):
+            raise TruncatedReplyError(
+                "your reply was cut off at the output-token limit, so the JSON is incomplete", raw=content
+            )
+        return content
 
 
 _FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
@@ -76,30 +92,32 @@ def _extract_json(text: str) -> object:
             return json.loads(candidate)
         except json.JSONDecodeError:
             continue
-    raise OutputParseError("reply is not a JSON object")
+    raise OutputParseError("reply is not a JSON object", raw=text)
 
 
 def parse_model(text: str, model: type[M]) -> M:
     try:
         return model.model_validate(_extract_json(text))
     except ValidationError as exc:
-        raise OutputParseError(f"JSON does not match the schema: {exc}") from exc
+        raise OutputParseError(f"JSON does not match the schema: {exc}", raw=text) from exc
 
 
 def complete_structured(
-    llm: LLMClient, call: LLMCall, model: type[M], *, repairs: int = 1
+    llm: LLMClient, call: LLMCall, model: type[M], *, repairs: int = 2
 ) -> M:
-    """Call the model and parse its reply; on invalid output, ask it to repair once."""
+    """Call the model and parse its reply; on invalid output, tell it what was wrong and retry."""
     for attempt in range(repairs + 1):
-        raw = llm.complete(call)
         try:
-            return parse_model(raw, model)
+            return parse_model(llm.complete(call), model)
         except OutputParseError as exc:
             if attempt == repairs:
                 raise
+            hint = ("Be more concise: the same content in fewer words; for code, fewer and sharper "
+                    "cases." if isinstance(exc, TruncatedReplyError)
+                    else "Make sure every string is valid JSON (escape quotes, backslashes and newlines).")
             call = replace(
                 call,
-                user=f"{call.user}\n\n# Your previous reply was rejected\n{exc}\n"
+                user=f"{call.user}\n\n# Your previous reply was rejected\n{exc}\n{hint}\n"
                 "Reply again with ONLY the corrected JSON object.",
             )
     raise AssertionError("unreachable")

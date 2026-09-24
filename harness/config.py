@@ -25,6 +25,7 @@ class Settings:
     base_url: str | None
     model: str | None
     ssl_verify: bool
+    max_tokens: int | None
     temperature: float
     max_revisions: int
     sandbox_timeout_s: int
@@ -51,6 +52,7 @@ class Settings:
             base_url=env("HARNESS_BASE_URL") or None,
             model=env("HARNESS_MODEL") or None,
             ssl_verify=flag("HARNESS_SSL_VERIFY"),
+            max_tokens=int(env("HARNESS_MAX_TOKENS") or 0) or None,
             temperature=float(env("HARNESS_TEMPERATURE", "0.2")),
             max_revisions=int(env("HARNESS_MAX_REVISIONS", "2")),
             sandbox_timeout_s=int(env("HARNESS_SANDBOX_TIMEOUT", "60")),

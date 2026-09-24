@@ -197,5 +197,5 @@ class MutationTester:
         with ThreadPoolExecutor(max_workers=self.workers) as pool:
             killed = list(pool.map(is_killed, mutants))
         survivors = [Survivor(operator=m.operator, line=m.line, description=m.description)
-                     for m, dead in zip(mutants, killed) if not dead]
+                     for m, dead in zip(mutants, killed, strict=True) if not dead]
         return MutationReport(total=len(mutants), killed=len(mutants) - len(survivors), survivors=survivors)

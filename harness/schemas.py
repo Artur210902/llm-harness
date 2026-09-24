@@ -204,4 +204,10 @@ class SandboxReport(Artifact):
         return f"{text}; {self.mutation.headline()}" if self.mutation else text
 
     def render_for_prompt(self) -> str:
-        return f"```json\n{json.dumps(self.model_dump(), indent=2)}\n```"
+        report = f"```json\n{json.dumps(self.model_dump(exclude_none=True), indent=2)}\n```"
+        if self.mutation is None:
+            report += "\nMutation check: not run (it runs only when all tests pass)."
+        else:
+            report += ("\nMutation check: the harness planted the listed bugs into the code and re-ran the "
+                       "tests; `survivors` went undetected (some may be equivalent to the original code).")
+        return report

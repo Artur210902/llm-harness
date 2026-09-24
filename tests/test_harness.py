@@ -1,4 +1,5 @@
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -14,9 +15,18 @@ from harness.dispatcher import (
     steps_to_rerun,
     validate_plan,
 )
-from harness.llm import LLMCall, OutputParseError, parse_model
+from harness.llm import LLMCall, OutputParseError, TruncatedReplyError, complete_structured, parse_model
 from harness.mutation import MutationTester, generate_mutants, weakness
-from harness.offline import BUCKET_V2, OfflineScriptedClient, ratelimit_plan, ratelimit_tests, upload_plan
+from harness.offline import (
+    BUCKET_NAIVE,
+    BUCKET_V2,
+    UPLOAD_NAIVE,
+    UPLOAD_SECURE,
+    OfflineScriptedClient,
+    ratelimit_plan,
+    ratelimit_tests,
+    upload_plan,
+)
 from harness.sandbox import PytestSandbox
 from harness.schemas import (
     CodeArtifact,
@@ -32,6 +42,9 @@ from harness.skills import SkillRegistry
 from harness.tracing import Tracer
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from probes import probe  # noqa: E402
+
 UPLOAD_REQUEST = "Write resolve_upload_path(base_dir, filename) for files uploaded by clients."
 
 
@@ -116,6 +129,45 @@ def test_parse_model_accepts_fenced_json_and_rejects_garbage():
         parse_model("no json here", CodeArtifact)
 
 
+def test_truncated_reply_is_retried_with_a_conciseness_hint():
+    class Truncating:
+        name = "truncating"
+
+        def __init__(self):
+            self.calls: list[LLMCall] = []
+
+        def complete(self, call: LLMCall) -> str:
+            self.calls.append(call)
+            if len(self.calls) == 1:
+                raise TruncatedReplyError("cut off", raw='{"module_name": "m", "co')
+            return '{"module_name": "m", "code": "x = 1"}'
+
+    llm = Truncating()
+
+    assert complete_structured(llm, LLMCall("code_generator", "", "task"), CodeArtifact).code == "x = 1"
+    assert "concise" in llm.calls[1].user
+
+
+def test_invalid_revision_keeps_previous_attempt_and_fails_the_run(tmp_path, registry):
+    class BrokenTestRevision(OfflineScriptedClient):
+        def complete(self, call: LLMCall) -> str:
+            if call.agent == "test_generator" and call.revision:
+                return "sorry, here are the tests: def test_x(): ..."
+            return super().complete(call)
+
+    sandbox = PytestSandbox()
+    tracer = Tracer(tmp_path, Console(quiet=True))
+    dispatcher = Dispatcher(llm=BrokenTestRevision("upload"), registry=registry, sandbox=sandbox,
+                            tracer=tracer, mutation=MutationTester(sandbox))
+
+    result = dispatcher.run(UPLOAD_REQUEST)
+    tracer.close()
+
+    assert result.final.status == "FAILED"  # weak tests were never fixed, and the run still finished
+    assert result.revisions == 2
+    assert (tmp_path / "prompts" / "s3_test_generator.rev1.invalid_reply.txt").is_file()
+
+
 def test_rerun_covers_target_and_its_dependents_only():
     plan = _plan(upload_plan)
 
@@ -195,6 +247,15 @@ def test_concurrency_skill_makes_tests_detect_a_missing_lock(skills, killed):
     assert sandbox.run(CodeArtifact(module_name="rate_limiter", code=BUCKET_V2), tests).status == "passed"
     report = sandbox.run(CodeArtifact(module_name="rate_limiter", code=no_lock.code), tests)
     assert (report.status != "passed") is killed
+
+
+@pytest.mark.parametrize(
+    "case_id, module, good, bad",
+    [("upload", "upload_paths", UPLOAD_SECURE, UPLOAD_NAIVE), ("ratelimit", "rate_limiter", BUCKET_V2, BUCKET_NAIVE)],
+)
+def test_independent_probes_separate_good_from_bad_code(case_id, module, good, bad):
+    assert probe(case_id, module, good)["failed"] == 0
+    assert probe(case_id, module, bad)["failed"] > 0
 
 
 @pytest.mark.parametrize(

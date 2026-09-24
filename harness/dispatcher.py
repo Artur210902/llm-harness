@@ -211,7 +211,7 @@ class Dispatcher:
             else:
                 results = [run(step) for step in wave]
             # written after the wave, in plan order: steps of one wave never read each other
-            for step, output in zip(wave, results):
+            for step, output in zip(wave, results, strict=True):
                 outputs[step.id] = output
 
     def _run_step(
@@ -252,8 +252,17 @@ class Dispatcher:
         self.tracer.delegate(step, attachments, revision, [label.split(" ·")[0] for label, _ in inputs],
                              (len(system), len(user)))
         started = time.perf_counter()
-        run = agent.run(step_id=step.id, objective=step.objective, inputs=inputs,
-                        attachments=attachments, revision=revision)
+        try:
+            run = agent.run(step_id=step.id, objective=step.objective, inputs=inputs,
+                            attachments=attachments, revision=revision)
+        except OutputParseError as exc:
+            suffix = f".rev{revision}" if revision else ""
+            self.tracer.save(f"prompts/{step.id}_{step.agent}{suffix}.invalid_reply.txt", exc.raw)
+            if step.id not in outputs:
+                raise
+            # A failed revision must not sink the run: keep the previous attempt and let the gate decide.
+            self.tracer.warn(f"{step.id} {step.agent} returned no valid output ({exc}); keeping previous attempt")
+            return outputs[step.id]
         elapsed = time.perf_counter() - started
 
         self.tracer.save_prompts(step.id, step.agent, revision, run.system_prompt, run.user_prompt)

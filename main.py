@@ -41,7 +41,7 @@ def build_llm(settings: Settings, case: dict, force_offline: bool) -> LLMClient:
     if settings.has_llm and not force_offline:
         return OpenAICompatibleClient(api_key=settings.api_key, model=settings.model,
                                       base_url=settings.base_url, temperature=settings.temperature,
-                                      ssl_verify=settings.ssl_verify)
+                                      ssl_verify=settings.ssl_verify, max_tokens=settings.max_tokens)
     if not case.get("offline_script"):
         sys.exit("Custom requests need a real LLM: set HARNESS_API_KEY and HARNESS_MODEL (see .env.example).")
     return OfflineScriptedClient(case["offline_script"])
