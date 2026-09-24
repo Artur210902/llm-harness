@@ -203,6 +203,16 @@ class SandboxReport(Artifact):
         )
         return f"{text}; {self.mutation.headline()}" if self.mutation else text
 
+    def failure_evidence(self, max_lines: int = 40) -> str:
+        """What failed and the observed vs expected values - black-box facts, no implementation source.
+
+        Keeps pytest's section headers, `E ...` assertion lines and the FAILED/ERROR summary; drops
+        the traceback code lines, which may quote the implementation.
+        """
+        keep = [ln for ln in self.output_tail.splitlines()
+                if ln.startswith(("FAILED", "ERROR", "____")) or ln.lstrip().startswith("E ")]
+        return "\n".join(keep[:max_lines])
+
     def render_for_prompt(self) -> str:
         report = f"```json\n{json.dumps(self.model_dump(exclude_none=True), indent=2)}\n```"
         if self.mutation is None:

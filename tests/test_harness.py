@@ -168,6 +168,24 @@ def test_invalid_revision_keeps_previous_attempt_and_fails_the_run(tmp_path, reg
     assert (tmp_path / "prompts" / "s3_test_generator.rev1.invalid_reply.txt").is_file()
 
 
+def test_failure_evidence_keeps_facts_and_drops_source_lines():
+    tail = """________ test_refill ________
+
+    def test_refill():
+        bucket = TokenBucket(capacity=10, refill_rate=1, clock=clock)
+>       assert bucket.available == 0
+E       assert 5.0 == 0
+
+token_bucket.py:42: in available
+    return self._secret_formula()
+FAILED test_token_bucket.py::test_refill - assert 5.0 == 0"""
+
+    evidence = SandboxReport(status="failed", failed=1, output_tail=tail).failure_evidence()
+
+    assert "E       assert 5.0 == 0" in evidence and "FAILED test_token_bucket.py::test_refill" in evidence
+    assert "_secret_formula" not in evidence  # implementation source never reaches the test oracle
+
+
 def test_rerun_covers_target_and_its_dependents_only():
     plan = _plan(upload_plan)
 

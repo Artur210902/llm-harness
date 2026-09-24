@@ -166,8 +166,9 @@ class Dispatcher:
             rerun = steps_to_rerun(plan, decision.agents)
             self.tracer.revision(revisions, decision, [s.id for s in rerun])
             feedback = {"code_generator": decision.feedback_for_code, "test_generator": decision.feedback_for_tests}
+            evidence = self._failure_evidence(outputs)
             self._execute(plan, rerun, request, outputs,
-                          feedback={a: feedback[a] or gate.feedback() for a in decision.agents},
+                          feedback={a: (feedback[a] or gate.feedback()) + evidence for a in decision.agents},
                           revision=revisions)
             gate = self._quality_gate(plan, outputs)
 
@@ -341,6 +342,14 @@ class Dispatcher:
             self.tracer.warn(f"revision target {decision.target} overridden by harness policy -> {target}")
             decision = decision.model_copy(update={"target": target})
         return decision
+
+    @staticmethod
+    def _failure_evidence(outputs: dict[str, Artifact]) -> str:
+        """Raw pytest facts for the revising agents, so they need not rely on a paraphrase."""
+        sandbox = next((o for o in reversed(outputs.values()) if isinstance(o, SandboxReport)), None)
+        if sandbox is None or sandbox.status == "passed" or not (facts := sandbox.failure_evidence()):
+            return ""
+        return f"\n\n# Sandbox evidence (pytest, observed behaviour)\n```\n{facts}\n```"
 
     # --- closing ----------------------------------------------------------------
 

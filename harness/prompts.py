@@ -64,11 +64,13 @@ they must change.
   not require (compare it with the acceptance criteria), or the mutation check shows that the
   tests do not detect planted bugs ("tests too weak").
 - both: there are problems of both kinds.
-Weigh the evidence: a failing test is not automatically the code's fault.
+Weigh the evidence: a failing test is not automatically the code's fault. For a failing
+assertion, recompute the expected value from the acceptance criteria step by step before you
+blame either side. Base the diagnosis only on the evidence shown; never invent a cause.
 
 # Feedback
 Write feedback only for the agents you choose: concrete and actionable, citing the failing test,
-finding or weakness. test_generator is an independent black-box oracle: never quote implementation
+finding or weakness. The harness also forwards the raw pytest failure lines to them. test_generator is an independent black-box oracle: never quote implementation
 code to it - describe the required behaviour and the scenario its tests must cover.
 
 Return ONLY a JSON object matching this JSON Schema:
