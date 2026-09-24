@@ -51,6 +51,21 @@ class ExecutionPlan(Artifact):
     steps: list[PlanStep]
 
 
+class RevisionDecision(Artifact):
+    target: Literal["code_generator", "test_generator", "both"] = Field(
+        description="Who must revise: the implementation, the test suite, or both."
+    )
+    rationale: str = Field(description="Why this target: which gate problem is whose fault.")
+    feedback_for_code: str = Field(default="", description="Actionable instructions for code_generator.")
+    feedback_for_tests: str = Field(
+        default="", description="Actionable instructions for test_generator; never include implementation code."
+    )
+
+    @property
+    def agents(self) -> tuple[str, ...]:
+        return ("code_generator", "test_generator") if self.target == "both" else (self.target,)
+
+
 class FinalReport(Artifact):
     status: Literal["DELIVERED", "DELIVERED_WITH_RISKS", "FAILED"]
     summary: str
@@ -151,6 +166,27 @@ class ReviewReport(AgentOutput):
 # --- Tools ----------------------------------------------------------------------
 
 
+class Survivor(BaseModel):
+    operator: str
+    line: int
+    description: str
+
+
+class MutationReport(BaseModel):
+    """How many planted bugs the test suite detected (see harness/mutation.py)."""
+
+    total: int
+    killed: int
+    survivors: list[Survivor] = Field(default_factory=list)
+
+    @property
+    def score(self) -> float:
+        return self.killed / self.total if self.total else 1.0
+
+    def headline(self) -> str:
+        return f"{self.killed}/{self.total} mutants killed ({self.score:.2f})"
+
+
 class SandboxReport(Artifact):
     status: Literal["passed", "failed", "error", "timeout"]
     passed: int = 0
@@ -158,12 +194,14 @@ class SandboxReport(Artifact):
     errors: int = 0
     duration_s: float = 0.0
     output_tail: str = ""
+    mutation: MutationReport | None = None
 
     def headline(self) -> str:
-        return (
+        text = (
             f"{self.status}: {self.passed} passed, {self.failed} failed, "
             f"{self.errors} errors in {self.duration_s:.2f}s"
         )
+        return f"{text}; {self.mutation.headline()}" if self.mutation else text
 
     def render_for_prompt(self) -> str:
         return f"```json\n{json.dumps(self.model_dump(), indent=2)}\n```"

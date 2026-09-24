@@ -28,6 +28,9 @@ class Settings:
     temperature: float
     max_revisions: int
     sandbox_timeout_s: int
+    max_mutants: int
+    mutation_threshold: float
+    parallel: bool
     skills_dir: Path
     runs_dir: Path
 
@@ -39,14 +42,21 @@ class Settings:
     def from_env(cls, root: Path) -> Settings:
         load_dotenv(root / ".env")
         env = os.environ.get
+
+        def flag(name: str, default: str = "true") -> bool:
+            return env(name, default).lower() not in ("0", "false", "no")
+
         return cls(
             api_key=env("HARNESS_API_KEY") or env("OPENAI_API_KEY") or None,
             base_url=env("HARNESS_BASE_URL") or None,
             model=env("HARNESS_MODEL") or None,
-            ssl_verify=env("HARNESS_SSL_VERIFY", "true").lower() not in ("0", "false", "no"),
+            ssl_verify=flag("HARNESS_SSL_VERIFY"),
             temperature=float(env("HARNESS_TEMPERATURE", "0.2")),
             max_revisions=int(env("HARNESS_MAX_REVISIONS", "2")),
             sandbox_timeout_s=int(env("HARNESS_SANDBOX_TIMEOUT", "60")),
+            max_mutants=int(env("HARNESS_MAX_MUTANTS", "12")),
+            mutation_threshold=float(env("HARNESS_MUTATION_THRESHOLD", "0.6")),
+            parallel=flag("HARNESS_PARALLEL"),
             skills_dir=root / "skills",
             runs_dir=root / "runs",
         )

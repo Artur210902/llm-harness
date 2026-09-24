@@ -59,7 +59,10 @@ AGENTS: dict[str, AgentSpec] = {
             "Output: TestSuite.",
             mission="Write an independent pytest suite from the specification alone - you are the "
             "oracle that catches the implementer's mistakes. Import from the module named in the "
-            "spec. Tests must be deterministic, fast and hermetic.",
+            "spec. Tests must be deterministic, fast and hermetic. The harness checks your suite by "
+            "planting bugs into the implementation: tests that pass on buggy code are worthless. If "
+            "`revision_feedback` is among the inputs, fix every listed problem in `previous_attempt` "
+            "and keep the tests that are correct.",
             output_model=TestSuite,
         ),
         AgentSpec(

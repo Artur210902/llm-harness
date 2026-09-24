@@ -9,7 +9,9 @@ runs/<timestamp>_<case>/
 
 from __future__ import annotations
 
+import functools
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -18,7 +20,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.panel import Panel
 
-from .schemas import Artifact, ExecutionPlan, FinalReport, PlanStep, SandboxReport
+from .schemas import Artifact, ExecutionPlan, FinalReport, PlanStep, RevisionDecision, SandboxReport
 from .skills import SkillAttachment
 
 _STATUS_STYLE = {"DELIVERED": "green", "DELIVERED_WITH_RISKS": "yellow", "FAILED": "red"}
@@ -29,23 +31,35 @@ def _short(text: str, limit: int = 150) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _atomic(method):
+    """Steps of one wave run in parallel: keep each event's console block and JSON line intact."""
+    @functools.wraps(method)
+    def wrapper(self: Tracer, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
 class Tracer:
     def __init__(self, run_dir: Path, console: Console | None = None):
         self.run_dir = run_dir
         self.console = console or Console(highlight=False)
         run_dir.mkdir(parents=True, exist_ok=True)
         self._trace = (run_dir / "trace.jsonl").open("a", encoding="utf-8")
+        self._lock = threading.RLock()
 
     def close(self) -> None:
         self._trace.close()
 
     # --- persistence ------------------------------------------------------------
 
+    @_atomic
     def _event(self, kind: str, **payload: Any) -> None:
         record = {"ts": round(time.time(), 3), "event": kind, **payload}
         self._trace.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         self._trace.flush()
 
+    @_atomic
     def save(self, relative: str, content: str) -> Path:
         path = self.run_dir / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -83,12 +97,14 @@ class Tracer:
                 f"[dim]in:[/] {', '.join(s.inputs)}"
             )
 
+    @_atomic
     def warn(self, message: str) -> None:
         self._event("warning", message=message)
         self._print(f"[yellow]  ! {escape(message)}[/]")
 
     # --- delegation -------------------------------------------------------------
 
+    @_atomic
     def delegate(
         self,
         step: PlanStep,
@@ -120,11 +136,13 @@ class Tracer:
         system_chars, user_chars = prompt_chars
         self._print(f"    prompt   : [dim]system {system_chars} chars, user {user_chars} chars[/]")
 
+    @_atomic
     def save_prompts(self, step_id: str, agent: str, revision: int, system: str, user: str) -> None:
         suffix = f".rev{revision}" if revision else ""
         self.save(f"prompts/{step_id}_{agent}{suffix}.md",
                   f"# SYSTEM\n\n{system}\n\n# USER\n\n{user}\n")
 
+    @_atomic
     def result(self, step: PlanStep, output: Artifact, elapsed_s: float,
                applied_rules: list[str], unknown_rules: set[str]) -> None:
         self._event("result", step=step.id, agent=step.agent, elapsed_s=round(elapsed_s, 3),
@@ -137,6 +155,7 @@ class Tracer:
             self.warn(f"{step.agent} cited rules not present in injected skills: "
                       f"{', '.join(sorted(unknown_rules))}")
 
+    @_atomic
     def tool(self, step: PlanStep, report: SandboxReport) -> None:
         self._event("tool", step=step.id, tool=step.agent, report=report.model_dump())
         style = "green" if report.status == "passed" else "red"
@@ -146,9 +165,13 @@ class Tracer:
             failing = [ln for ln in report.output_tail.splitlines() if ln.startswith(("FAILED", "ERROR"))]
             for line in failing[:5]:
                 self._print(f"    [red]{escape(_short(line, 140))}[/]")
+        if report.mutation is not None:
+            for s in report.mutation.survivors:
+                self._print(f"    [yellow]survived {s.operator} (line {s.line}): {escape(_short(s.description, 110))}[/]")
 
     # --- gate, revisions, final -------------------------------------------------
 
+    @_atomic
     def gate(self, passed: bool, problems: list[str]) -> None:
         self._event("gate", passed=passed, problems=problems)
         if passed:
@@ -158,12 +181,14 @@ class Tracer:
         for problem in problems:
             self._print(f"    [red]- {escape(_short(problem, 200))}[/]")
 
-    def revision(self, number: int, rerun_ids: list[str]) -> None:
-        self._event("revision", number=number, rerun=rerun_ids)
+    @_atomic
+    def revision(self, number: int, decision: RevisionDecision, rerun_ids: list[str]) -> None:
+        self._event("revision", number=number, decision=decision.model_dump(), rerun=rerun_ids)
         self._print(
-            f"[bold magenta]DISPATCHER[/] revision {number}: feedback → code_generator, "
+            f"[bold magenta]DISPATCHER[/] revision {number}: feedback → {' + '.join(decision.agents)}, "
             f"re-running dependent steps {', '.join(rerun_ids)}"
         )
+        self._print(f"    rationale: {escape(_short(decision.rationale, 200))}")
 
     def final(self, report: FinalReport, revisions: int, forced: bool) -> None:
         self._event("final", report=report.model_dump(), revisions=revisions, policy_override=forced)

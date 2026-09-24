@@ -1,10 +1,11 @@
 """Offline scripted LLM: lets `main.py` run end-to-end without an API key.
 
 This is a stand-in for the model only. The harness around it (plan validation,
-skill resolution and injection, prompt assembly, the pytest sandbox, quality gate,
-revision loop and policy overrides) runs for real. Replies are reactive the way a
-model's would be: they depend on WHICH skills were injected into the call, on the
-sandbox result routed to the reviewer, and on whether the call is a revision.
+skill resolution and injection, prompt assembly, the pytest sandbox, the mutation
+check, quality gate, revision routing and policy overrides) runs for real. Replies are
+reactive the way a model's would be: they depend on WHICH skills were injected into the
+call, on the sandbox result routed to the reviewer, on the gate problems shown to the
+dispatcher, and on whether the call is a revision.
 With `--no-skills` the scripted agents answer the way an un-skilled model typically
 does, which makes the effect of skills visible offline.
 """
@@ -90,7 +91,7 @@ UPLOAD_NAIVE = _code('''
         return os.path.join(base_dir, filename)
 ''')
 
-UPLOAD_TESTS_SKILLED = _code('''
+_UPLOAD_TESTS = '''
     import pytest
 
     from upload_paths import MAX_FILENAME_LENGTH, UnsafePathError, resolve_upload_path
@@ -131,12 +132,7 @@ UPLOAD_TESTS_SKILLED = _code('''
             resolve_upload_path(tmp_path, name)
 
 
-    def test_accepts_name_exactly_at_length_limit(tmp_path):
-        name = "a" * (MAX_FILENAME_LENGTH - 4) + ".txt"
-
-        assert resolve_upload_path(tmp_path, name).name == name
-
-
+    {at_limit}
     def test_rejects_name_one_past_length_limit(tmp_path):
         with pytest.raises(UnsafePathError):
             resolve_upload_path(tmp_path, "a" * (MAX_FILENAME_LENGTH + 1))
@@ -145,7 +141,17 @@ UPLOAD_TESTS_SKILLED = _code('''
     def test_unsafe_path_error_is_a_value_error(tmp_path):
         with pytest.raises(ValueError):
             resolve_upload_path(tmp_path, "../x")
-''')
+'''
+_AT_LIMIT = '''def test_accepts_name_exactly_at_length_limit(tmp_path):
+        name = "a" * (MAX_FILENAME_LENGTH - 4) + ".txt"
+
+        assert resolve_upload_path(tmp_path, name).name == name
+
+'''
+# The first attempt misses the "exactly at the limit" side of the boundary (a typical model slip,
+# against TST-03); the mutation check catches it and the dispatcher routes a test revision.
+UPLOAD_TESTS_SKILLED_V1 = _code(_UPLOAD_TESTS.replace("{at_limit}", ""))
+UPLOAD_TESTS_SKILLED = _code(_UPLOAD_TESTS.replace("{at_limit}", _AT_LIMIT))
 
 UPLOAD_TESTS_NAIVE = _code('''
     import os
@@ -262,11 +268,12 @@ def upload_code(call: LLMCall) -> dict:
 
 def upload_tests(call: LLMCall) -> dict:
     if _has(call, "pytest-patterns"):
-        return {"module_name": "upload_paths", "test_code": UPLOAD_TESTS_SKILLED,
+        return {"module_name": "upload_paths",
+                "test_code": UPLOAD_TESTS_SKILLED if call.revision else UPLOAD_TESTS_SKILLED_V1,
                 "covered_criteria": ["AC1 valid names", "AC2 str/Path base", "AC3-AC5 attack payloads",
                                      "AC6 length boundary", "AC7 empty name", "AC8 ValueError base"],
                 "applied_skill_rules": ["TST-01", "TST-02", "TST-03", "TST-04", "TST-06", "TST-07",
-                                        "TST-08"]}
+                                        "TST-08", *(["TST-09"] if call.revision else [])]}
     return {"module_name": "upload_paths", "test_code": UPLOAD_TESTS_NAIVE,
             "covered_criteria": ["returns path"], "applied_skill_rules": []}
 
@@ -413,7 +420,8 @@ BUCKET_NAIVE = _code('''
             return False
 ''')
 
-BUCKET_TESTS_SKILLED = _code('''
+_BUCKET_TESTS = '''
+    import sys
     import threading
 
     import pytest
@@ -465,13 +473,15 @@ BUCKET_TESTS_SKILLED = _code('''
         assert bucket.tokens == pytest.approx(5)
 
 
-    def test_clock_going_backwards_adds_no_tokens(clock):
+    def test_clock_going_backwards_adds_no_tokens_and_refill_resumes(clock):
         bucket = TokenBucket(capacity=1, refill_rate=1, clock=clock)
         assert bucket.try_acquire()
 
         clock.advance(-10)
-
         assert not bucket.try_acquire()
+
+        clock.advance(1)
+        assert bucket.tokens == pytest.approx(1)
 
 
     @pytest.mark.parametrize("capacity, rate", [(0, 1), (-1, 1), (1, 0), (1, -5)])
@@ -488,6 +498,8 @@ BUCKET_TESTS_SKILLED = _code('''
             bucket.try_acquire(tokens)
 
 
+    {concurrency}'''
+_CONCURRENCY_NAIVE = '''
     def test_concurrent_acquire_never_oversubscribes(clock):
         bucket = TokenBucket(capacity=100, refill_rate=1, clock=clock)
         start = threading.Barrier(8)
@@ -508,7 +520,35 @@ BUCKET_TESTS_SKILLED = _code('''
             thread.join()
 
         assert sum(results) == 100
-''')
+'''
+# With concurrency-safety injected (CONC-06) the test forces thread switches, so it can fail.
+_CONCURRENCY_FORCED = '''
+    @pytest.fixture
+    def frequent_thread_switches():
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        yield
+        sys.setswitchinterval(previous)
+
+
+    @pytest.mark.parametrize("attempt", range(10))
+    def test_concurrent_acquire_never_oversubscribes(clock, frequent_thread_switches, attempt):
+        bucket = TokenBucket(capacity=100, refill_rate=1, clock=clock)
+        start = threading.Barrier(8)
+        granted = []
+
+        def worker():
+            start.wait()
+            granted.append(sum(bucket.try_acquire() for _ in range(200)))
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert sum(granted) == 100
+'''
 
 BUCKET_TESTS_NAIVE = _code('''
     from rate_limiter import TokenBucket
@@ -623,10 +663,12 @@ def ratelimit_tests(call: LLMCall) -> dict:
     if not _has(call, "pytest-patterns"):
         return {"module_name": "rate_limiter", "test_code": BUCKET_TESTS_NAIVE,
                 "covered_criteria": ["acquire"], "applied_skill_rules": []}
-    rules = ["TST-01", "TST-02", "TST-03", "TST-04", "TST-05", "TST-07", "TST-08"]
+    rules = ["TST-01", "TST-02", "TST-03", "TST-04", "TST-05", "TST-07", "TST-08", "TST-09"]
+    concurrency = _CONCURRENCY_NAIVE
     if _has(call, "concurrency-safety"):
-        rules.append("CONC-05")
-    return {"module_name": "rate_limiter", "test_code": BUCKET_TESTS_SKILLED,
+        rules += ["CONC-05", "CONC-06"]
+        concurrency = _CONCURRENCY_FORCED
+    return {"module_name": "rate_limiter", "test_code": _code(_BUCKET_TESTS.replace("{concurrency}", concurrency)),
             "covered_criteria": [f"AC{i}" for i in range(1, 9)], "applied_skill_rules": rules}
 
 
@@ -672,6 +714,24 @@ def ratelimit_review(call: LLMCall) -> dict:
 _FINDING = re.compile(r"^\s*finding \[(\w+)\] [^:]*: (.*?) Recommendation: (.*)$", re.MULTILINE)
 
 
+def revise(call: LLMCall) -> dict:
+    """Routes the revision from the gate problems it is shown, like the real dispatcher would."""
+    problems = call.user.split("# Quality gate problems\n", 1)[1].split("\n\n#", 1)[0]
+    weak = [p for p in problems.splitlines() if "tests too weak" in p]
+    code = [p for p in problems.splitlines() if p not in weak]
+    target = "both" if weak and code else "test_generator" if weak else "code_generator"
+    return {
+        "target": target,
+        "rationale": ("The mutation check shows the suite does not detect planted bugs; the code is not at "
+                      "fault for that. " if weak else "")
+                     + ("The failing test matches an acceptance criterion, so the implementation is wrong."
+                        if code else ""),
+        "feedback_for_code": "\n".join(code),
+        "feedback_for_tests": ("Add tests that pin exact behaviour on BOTH sides of every documented limit "
+                               "(exactly at the limit and one past it); " + "; ".join(weak)) if weak else "",
+    }
+
+
 def finalize(call: LLMCall) -> dict:
     passed = "passed=True" in call.user
     revisions = int(re.search(r"revisions=(\d+)", call.user).group(1))
@@ -694,13 +754,13 @@ SCRIPTS: dict[str, dict[str, Handler]] = {
     "upload": {
         "dispatcher": upload_plan, "requirements_analyst": upload_spec, "code_generator": upload_code,
         "test_generator": upload_tests, "security_auditor": upload_audit, "code_reviewer": upload_review,
-        "dispatcher.finalize": finalize,
+        "dispatcher.finalize": finalize, "dispatcher.revise": revise,
     },
     "ratelimit": {
         "dispatcher": ratelimit_plan, "requirements_analyst": ratelimit_spec,
         "code_generator": ratelimit_code, "test_generator": ratelimit_tests,
         "security_auditor": ratelimit_audit, "code_reviewer": ratelimit_review,
-        "dispatcher.finalize": finalize,
+        "dispatcher.finalize": finalize, "dispatcher.revise": revise,
     },
 }
 

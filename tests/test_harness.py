@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -5,11 +6,28 @@ from rich.console import Console
 
 from harness.agents import AGENTS
 from harness.config import Settings
-from harness.dispatcher import Dispatcher, PlanValidationError, validate_plan
+from harness.dispatcher import (
+    Dispatcher,
+    GateResult,
+    PlanValidationError,
+    execution_waves,
+    steps_to_rerun,
+    validate_plan,
+)
 from harness.llm import LLMCall, OutputParseError, parse_model
-from harness.offline import OfflineScriptedClient, ratelimit_plan, upload_plan
+from harness.mutation import MutationTester, generate_mutants, weakness
+from harness.offline import BUCKET_V2, OfflineScriptedClient, ratelimit_plan, ratelimit_tests, upload_plan
 from harness.sandbox import PytestSandbox
-from harness.schemas import CodeArtifact, ExecutionPlan, Finding, SecurityReport
+from harness.schemas import (
+    CodeArtifact,
+    ExecutionPlan,
+    Finding,
+    MutationReport,
+    SandboxReport,
+    SecurityReport,
+    Survivor,
+    TestSuite,
+)
 from harness.skills import SkillRegistry
 from harness.tracing import Tracer
 
@@ -98,20 +116,105 @@ def test_parse_model_accepts_fenced_json_and_rejects_garbage():
         parse_model("no json here", CodeArtifact)
 
 
+def test_rerun_covers_target_and_its_dependents_only():
+    plan = _plan(upload_plan)
+
+    assert [s.id for s in steps_to_rerun(plan, ("test_generator",))] == ["s3", "s4", "s6"]
+    assert [s.id for s in steps_to_rerun(plan, ("code_generator",))] == ["s2", "s4", "s5", "s6"]
+
+
+def test_independent_steps_share_a_wave():
+    waves = execution_waves(_plan(upload_plan).steps)
+
+    assert [[s.id for s in wave] for wave in waves] == [["s1"], ["s2", "s3"], ["s4", "s5"], ["s6"]]
+
+
+class _FixedLLM:
+    name = "fixed"
+
+    def __init__(self, reply: dict):
+        self.reply = reply
+
+    def complete(self, call: LLMCall) -> str:
+        return json.dumps(self.reply)
+
+
+@pytest.mark.parametrize("weak_tests, expected", [(False, "code_generator"), (True, "both")])
+def test_policy_adds_test_generator_when_tests_are_weak(tmp_path, registry, weak_tests, expected):
+    llm = _FixedLLM({"target": "code_generator", "rationale": "r", "feedback_for_code": "fix"})
+    dispatcher = Dispatcher(llm=llm, registry=registry, sandbox=PytestSandbox(),
+                            tracer=Tracer(tmp_path, Console(quiet=True)))
+    gate = GateResult(passed=False, problems=["p"], weak_tests=weak_tests)
+
+    decision = dispatcher._decide_revision("req", _plan(upload_plan), {}, gate)
+
+    assert decision.target == expected
+
+
+# --- mutation check -----------------------------------------------------------------
+
+_SNIPPET = '''
+import threading
+_lock = threading.Lock()
+
+def take(n, limit):
+    if n <= 0:
+        raise ValueError("n")
+    with _lock:
+        return min(limit, n) >= 1
+'''
+
+
+def test_mutants_cover_every_operator_and_drop_all_locks():
+    mutants = generate_mutants(_SNIPPET, limit=20)
+
+    assert {m.operator for m in mutants} == {"DropLock", "DropClamp", "CompareSwap", "DropRaise"}
+    drop_lock = next(m for m in mutants if m.operator == "DropLock")
+    assert "with _lock" not in drop_lock.code
+    assert "n > 0" not in drop_lock.code and "n <= 0" in drop_lock.code  # one bug per mutant
+    assert next(m for m in mutants if m.operator == "DropClamp").code.count("min(") == 0
+
+
+def test_weakness_policy():
+    lock = Survivor(operator="DropLock", line=1, description="d")
+
+    assert weakness(MutationReport(total=10, killed=9, survivors=[lock]), 0.6).startswith("tests too weak")
+    assert weakness(MutationReport(total=10, killed=5), 0.6) is not None
+    assert weakness(MutationReport(total=10, killed=6), 0.6) is None
+    assert "self._" not in (weakness(MutationReport(total=4, killed=1, survivors=[lock]), 0.6) or "")
+
+
+@pytest.mark.parametrize("skills, killed", [(("pytest-patterns",), False),
+                                            (("pytest-patterns", "concurrency-safety"), True)])
+def test_concurrency_skill_makes_tests_detect_a_missing_lock(skills, killed):
+    """CONC-06 in action: only the skilled suite notices that the lock was removed."""
+    tests = TestSuite.model_validate(ratelimit_tests(LLMCall("test_generator", "", "", skills=skills)))
+    no_lock = next(m for m in generate_mutants(BUCKET_V2, 20) if m.operator == "DropLock")
+    sandbox = PytestSandbox()
+
+    assert sandbox.run(CodeArtifact(module_name="rate_limiter", code=BUCKET_V2), tests).status == "passed"
+    report = sandbox.run(CodeArtifact(module_name="rate_limiter", code=no_lock.code), tests)
+    assert (report.status != "passed") is killed
+
+
 @pytest.mark.parametrize(
-    "script, request_text, revisions",
-    [("upload", UPLOAD_REQUEST, 0), ("ratelimit", "потокобезопасный token bucket", 1)],
+    "script, request_text, revised",
+    [("upload", UPLOAD_REQUEST, "test_generator"), ("ratelimit", "потокобезопасный token bucket", "code_generator")],
 )
-def test_offline_end_to_end(tmp_path, registry, script, request_text, revisions):
+def test_offline_end_to_end(tmp_path, registry, script, request_text, revised):
+    sandbox = PytestSandbox()
     tracer = Tracer(tmp_path, Console(quiet=True))
-    dispatcher = Dispatcher(llm=OfflineScriptedClient(script), registry=registry,
-                            sandbox=PytestSandbox(), tracer=tracer)
+    dispatcher = Dispatcher(llm=OfflineScriptedClient(script), registry=registry, sandbox=sandbox,
+                            tracer=tracer, mutation=MutationTester(sandbox))
 
     result = dispatcher.run(request_text)
     tracer.close()
 
     assert result.gate.passed
-    assert result.revisions == revisions
+    assert result.revisions == 1
     assert result.final.status == "DELIVERED_WITH_RISKS"
+    events = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert next(e for e in events if e["event"] == "revision")["decision"]["target"] == revised
+    assert result.latest(SandboxReport).mutation.total > 0
     prompt = next((tmp_path / "prompts").glob("s2_code_generator*.md")).read_text(encoding="utf-8")
     assert '<skill name="python-clean-code"' in prompt  # runtime injection reached the sub-agent

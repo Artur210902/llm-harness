@@ -26,7 +26,9 @@ class PytestSandbox:
         self.timeout_s = timeout_s
         self.tail_chars = tail_chars
 
-    def run(self, code: CodeArtifact, tests: TestSuite) -> SandboxReport:
+    def run(self, code: CodeArtifact, tests: TestSuite, *, extra_args: tuple[str, ...] = (),
+            timeout_s: int | None = None) -> SandboxReport:
+        timeout_s = timeout_s or self.timeout_s
         env = {k: v for k in _ENV_KEEP if (v := os.environ.get(k)) is not None}
         env |= {"PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"}
         with tempfile.TemporaryDirectory(prefix="harness_sandbox_") as tmp:
@@ -34,16 +36,16 @@ class PytestSandbox:
             # module_name is schema-validated as a Python identifier, so no path tricks here
             (workdir / f"{code.module_name}.py").write_text(code.code, encoding="utf-8")
             (workdir / f"test_{tests.module_name}.py").write_text(tests.test_code, encoding="utf-8")
-            cmd = [sys.executable, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider"]
+            cmd = [sys.executable, "-m", "pytest", "-q", "--no-header", "-p", "no:cacheprovider", *extra_args]
             started = time.perf_counter()
             try:
                 proc = subprocess.run(
                     cmd, cwd=workdir, env=env, capture_output=True, text=True,
-                    encoding="utf-8", errors="replace", timeout=self.timeout_s,
+                    encoding="utf-8", errors="replace", timeout=timeout_s,
                 )
             except subprocess.TimeoutExpired:
-                return SandboxReport(status="timeout", duration_s=self.timeout_s,
-                                     output_tail=f"killed after {self.timeout_s}s")
+                return SandboxReport(status="timeout", duration_s=timeout_s,
+                                     output_tail=f"killed after {timeout_s}s")
             duration = time.perf_counter() - started
         output = (proc.stdout + proc.stderr).strip()
         counts = {"passed": 0, "failed": 0, "errors": 0}
