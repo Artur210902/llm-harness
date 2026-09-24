@@ -32,8 +32,11 @@ print(json.dumps({"total": len(payloads), "failed": len(escaped), "detail": esca
 '''
 
 RATELIMIT_PROBE = r'''
-import importlib, json, sys, threading
-TokenBucket = importlib.import_module(sys.argv[1]).TokenBucket
+import importlib, inspect, json, sys, threading
+module = importlib.import_module(sys.argv[1])
+# the class name is the model's choice: take the class that offers try_acquire
+TokenBucket = next(c for _, c in inspect.getmembers(module, inspect.isclass)
+                   if c.__module__ == module.__name__ and hasattr(c, "try_acquire"))
 sys.setswitchinterval(1e-6)
 over = []
 for _ in range(10):
