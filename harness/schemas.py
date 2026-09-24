@@ -156,11 +156,27 @@ class SecurityReport(AgentOutput):
 
 class ReviewReport(AgentOutput):
     verdict: Literal["APPROVE", "REQUEST_CHANGES"]
-    issues: list[str] = Field(default_factory=list, description="Actionable, for the implementer.")
+    issues: list[str] = Field(
+        default_factory=list,
+        description="BLOCKING only: an unmet acceptance criterion, a wrong test, or a defect the audit "
+        "or sandbox missed. Each names the owner (code_generator/test_generator), what, where, how to fix.",
+    )
+    suggestions: list[str] = Field(
+        default_factory=list, description="Non-blocking improvements (hardening, style, docs); do not gate delivery."
+    )
     summary: str = ""
 
+    @model_validator(mode="after")
+    def _verdict_follows_blocking_issues(self) -> ReviewReport:
+        # Harness policy: only blocking issues can hold delivery back, so the verdict follows them.
+        if self.issues:
+            self.verdict = "REQUEST_CHANGES"
+        elif self.verdict == "REQUEST_CHANGES":
+            self.verdict = "APPROVE"
+        return self
+
     def headline(self) -> str:
-        return f"verdict {self.verdict}, {len(self.issues)} issue(s)"
+        return f"verdict {self.verdict}, {len(self.issues)} blocking issue(s), {len(self.suggestions)} suggestion(s)"
 
 
 # --- Tools ----------------------------------------------------------------------

@@ -364,7 +364,8 @@ class Dispatcher:
                 digest += [f"  finding [{f.severity}] {f.rule_id or '-'}: {f.description} "
                            f"Recommendation: {f.recommendation}" for f in out.findings]
             if isinstance(out, ReviewReport):
-                digest += [f"  review note: {out.summary}"] + [f"  issue: {i}" for i in out.issues]
+                digest += [f"  review note: {out.summary}"] + [f"  blocking issue: {i}" for i in out.issues]
+                digest += [f"  suggestion (non-blocking): {s}" for s in out.suggestions]
         return digest
 
     def _finalize(self, request: str, plan: ExecutionPlan, outputs: dict[str, Artifact],

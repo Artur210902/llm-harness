@@ -80,10 +80,14 @@ AGENTS: dict[str, AgentSpec] = {
             title="Code Reviewer",
             description="Final quality gate: checks spec coverage, sandbox results and the "
             "security report; approves or requests changes. Output: ReviewReport.",
-            mission="Act as the final quality gate. APPROVE only if the sandbox passed, the audit "
-            "has no blocking findings and every acceptance criterion is implemented. Otherwise "
-            "REQUEST_CHANGES with concrete, actionable issues addressed to the implementer "
-            "(what is wrong, where, how to fix).",
+            mission="Act as the final quality gate. The harness itself already enforces failing "
+            "tests, weak tests (mutation check) and HIGH/CRITICAL audit findings - do not restate "
+            "those. Your job is what code cannot check: is every acceptance criterion really "
+            "implemented and correctly tested? Put only BLOCKING problems in `issues` (an unmet "
+            "criterion, a test that asserts the wrong behaviour, a defect everyone else missed), each "
+            "addressed to its owner with what, where and how to fix. Everything else - hardening, "
+            "style, docs, nice-to-have tests - goes to `suggestions` and does not block delivery. "
+            "REQUEST_CHANGES if and only if `issues` is non-empty.",
             output_model=ReviewReport,
         ),
     )

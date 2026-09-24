@@ -33,6 +33,7 @@ from harness.schemas import (
     ExecutionPlan,
     Finding,
     MutationReport,
+    ReviewReport,
     SandboxReport,
     SecurityReport,
     Survivor,
@@ -108,6 +109,14 @@ def test_blocking_finding_forces_security_fail():
     finding = Finding(severity="HIGH", location="f", description="d", recommendation="r")
 
     assert SecurityReport(verdict="PASS", findings=[finding]).verdict == "FAIL"
+
+
+def test_only_blocking_review_issues_hold_delivery():
+    suggestions_only = ReviewReport(verdict="REQUEST_CHANGES", suggestions=["use os.path.isabs"])
+    blocking = ReviewReport(verdict="APPROVE", issues=["AC3 not implemented"])
+
+    assert suggestions_only.verdict == "APPROVE"
+    assert blocking.verdict == "REQUEST_CHANGES"
 
 
 @pytest.mark.parametrize("raw, expected", [(None, True), ("true", True), ("false", False), ("0", False),

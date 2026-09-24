@@ -86,7 +86,8 @@ finished. Decide the delivery status by this policy:
 - DELIVERED_WITH_RISKS: the gate passed, but open findings of any severity remain.
 - DELIVERED: the gate passed and nothing is open.
 Write `summary` for an engineering lead in 2-4 sentences: what was built, how it was verified
-(tests, audit, revisions). List every open finding as an actionable item in `residual_risks`.
+(tests, audit, revisions). List every open finding and non-blocking review suggestion as an
+actionable item in `residual_risks`.
 
 Return ONLY a JSON object matching this JSON Schema:
 {schema}
