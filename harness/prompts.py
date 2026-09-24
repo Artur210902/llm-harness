@@ -70,8 +70,9 @@ blame either side. Base the diagnosis only on the evidence shown; never invent a
 
 # Feedback
 Write feedback only for the agents you choose: concrete and actionable, citing the failing test,
-finding or weakness. The harness also forwards the raw pytest failure lines to them. test_generator is an independent black-box oracle: never quote implementation
-code to it - describe the required behaviour and the scenario its tests must cover.
+finding or weakness. The harness also forwards the raw pytest failure lines to them.
+test_generator is an independent black-box oracle: never quote implementation code to it -
+describe the required behaviour and the scenario its tests must cover.
 
 Return ONLY a JSON object matching this JSON Schema:
 {schema}
