@@ -24,6 +24,7 @@ class Settings:
     api_key: str | None
     base_url: str | None
     model: str | None
+    ssl_verify: bool
     temperature: float
     max_revisions: int
     sandbox_timeout_s: int
@@ -42,6 +43,7 @@ class Settings:
             api_key=env("HARNESS_API_KEY") or env("OPENAI_API_KEY") or None,
             base_url=env("HARNESS_BASE_URL") or None,
             model=env("HARNESS_MODEL") or None,
+            ssl_verify=env("HARNESS_SSL_VERIFY", "true").lower() not in ("0", "false", "no"),
             temperature=float(env("HARNESS_TEMPERATURE", "0.2")),
             max_revisions=int(env("HARNESS_MAX_REVISIONS", "2")),
             sandbox_timeout_s=int(env("HARNESS_SANDBOX_TIMEOUT", "60")),

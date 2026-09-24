@@ -4,6 +4,7 @@ import pytest
 from rich.console import Console
 
 from harness.agents import AGENTS
+from harness.config import Settings
 from harness.dispatcher import Dispatcher, PlanValidationError, validate_plan
 from harness.llm import LLMCall, OutputParseError, parse_model
 from harness.offline import OfflineScriptedClient, ratelimit_plan, upload_plan
@@ -76,6 +77,17 @@ def test_blocking_finding_forces_security_fail():
     finding = Finding(severity="HIGH", location="f", description="d", recommendation="r")
 
     assert SecurityReport(verdict="PASS", findings=[finding]).verdict == "FAIL"
+
+
+@pytest.mark.parametrize("raw, expected", [(None, True), ("true", True), ("false", False), ("0", False),
+                                           ("No", False)])
+def test_ssl_verify_setting(tmp_path, monkeypatch, raw, expected):
+    if raw is None:
+        monkeypatch.delenv("HARNESS_SSL_VERIFY", raising=False)
+    else:
+        monkeypatch.setenv("HARNESS_SSL_VERIFY", raw)
+
+    assert Settings.from_env(tmp_path).ssl_verify is expected
 
 
 def test_parse_model_accepts_fenced_json_and_rejects_garbage():

@@ -33,10 +33,14 @@ class LLMClient(Protocol):
 
 
 class OpenAICompatibleClient:
-    def __init__(self, *, api_key: str, model: str, base_url: str | None, temperature: float):
+    def __init__(self, *, api_key: str, model: str, base_url: str | None, temperature: float,
+                 ssl_verify: bool = True):
+        import httpx
         from openai import OpenAI  # imported lazily: offline mode needs no SDK
 
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # ssl_verify=False is for self-hosted endpoints with self-signed certificates
+        http_client = None if ssl_verify else httpx.Client(verify=False)
+        self._client = OpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
         self._model = model
         self._temperature = temperature
         self.name = f"{model} @ {base_url or 'api.openai.com'}"
